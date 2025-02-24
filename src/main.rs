@@ -1,6 +1,7 @@
 use bevy::{asset::RenderAssetUsages, color::palettes::css::{RED, SILVER, WHITE}, log, pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin}, prelude::*, render::{mesh::{self, Indices, PrimitiveTopology, VertexAttributeValues}, settings::{RenderCreation, WgpuFeatures, WgpuSettings}, RenderPlugin}, scene::ron::de, utils::{info, HashMap}};
 //use bevy_rts_camera::{RtsCamera, RtsCameraControls, RtsCameraPlugin}
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
+use bevy_rapier3d::{plugin::{NoUserData, RapierPhysicsPlugin}, prelude::{Collider, Restitution, RigidBody}, render::RapierDebugRenderPlugin};
 
 
 use std::f32::consts::PI;
@@ -10,6 +11,12 @@ use std::f32::consts::PI;
 struct Boid {
     position: Vec3,
     velocity: Vec3,
+    flock_id : u16
+}
+
+#[derive(Component)]
+struct Target {
+    position : Vec3,
 }
 
 #[derive(Resource)]
@@ -64,13 +71,13 @@ fn create_wireframe_cube(x_length: f32, y_length: f32, z_length: f32) -> Mesh {
 
 fn main() {
     App::new()
-    .add_plugins((
-        DefaultPlugins{}
-    ))
-    .insert_resource(BoidContext{ count: 50})
+    .add_plugins(DefaultPlugins{})
+    .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
+    .add_plugins(RapierDebugRenderPlugin::default())
+    .insert_resource(BoidContext{ count: 150})
     .add_plugins(PanOrbitCameraPlugin)
-    .add_systems(Startup, (setup_scene))
-    .add_systems(Update, (sync_enemy_mesh_transform,enemy_ai) )
+    .add_systems(Startup, setup_scene)
+    .add_systems(Update, (update_target,sync_enemy_mesh_transform,enemy_ai) )
     .run();
 }
 
@@ -82,35 +89,37 @@ fn setup_scene(mut commands: Commands,
 
         // cube
     //commands.spawn((
-    //     Mesh3d(meshes.add(Cuboid::new(1.0, 1.0, 1.0))),
-    //     MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
-    //     Transform::from_xyz(0.0, 0.5, 0.0),Shape
+        // Mesh3d(meshes.add(Cuboid::new(0.3, 0.3,0.3))),
+         //MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255))),
+         //Transform::from_xyz(0.0, 0.5, 0.0)
     //  ));
-    
+    commands.spawn(Target {
+        position: Vec3::new(0.0, 0.0, 0.0),
+    }).insert((Mesh3d(meshes.add(Cuboid::new(0.3, 0.3,0.3))),
+                      MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 155))),
+                      Transform::from_xyz(0.0, 0.5, 0.0)));
 
-
-    let cone_mesh = Mesh3d(meshes.add(Cone::new(0.1, 0.3)));
-
-    //let enemy_mesh = Mesh3d(meshes.add(Cuboid::new(0.2, 0.2, 0.1)));
-
-    let enemy_mat = MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255)));
-
-    
+    let boid_mesh = Mesh3d(meshes.add(Cone::new(0.1, 0.3)));
+    let boid_mat = MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255)));
+ 
     for i in 0..context.count {
         let x = i as f32 * 2.0;
         let y = 0.0;
-        let z = ((i % 3)) as f32;
+        let z = ((i % 4)) as f32;
         let boid = Boid {
             position: Vec3::new(x.sin()*2.0, x.cos()*2.0, z),
             velocity: Vec3::ZERO,
+            flock_id: (i % 3) as u16,
         };
         //context.boids.push(boid);
         commands.spawn(boid)
         .insert((
-            cone_mesh.clone(),
-            enemy_mat.clone(),
+            boid_mesh.clone(),
+            boid_mat.clone(),
             Transform::from_xyz(x, y, z),
-        ));
+        )).insert(RigidBody::KinematicPositionBased)
+        .insert(Collider::cone(0.3/2.0,0.1))
+        .insert(Restitution::coefficient(0.7));
         
     }
     
@@ -173,17 +182,37 @@ fn sync_enemy_mesh_transform(
     }
 }
 
+fn update_target(
+    mut query: Query<(&mut Target, &mut Transform)>,
+    time: Res<Time>
+) {
+    let t=time.elapsed().as_secs_f32();
+    for (mut target, mut transform) in query.iter_mut() {
+        target.position = Vec3::new(t.sin()*3.0, t.cos()*4.0, t.sin()*3.0 * t.cos() );
+        //target.
+        transform.translation = target.position;
+    }
+}
+
 fn enemy_ai(
     mut query: Query<(Entity, &mut Boid, &mut Transform)>,
+    query2: Query<&Target>,
     time: Res<Time>,
 ) {
     let separation_distance = 1.0;
-    let alignment_distance = 2.0;
-    let cohesion_distance = 2.5;
+    let alignment_distance = 1.0;
+    let cohesion_distance = 1.5;
+    let cohesion_force = 0.02;
+    let seperation_force = 0.08;
+    let alignment_force = 0.06;
     let max_speed = 4.0;
-    let max_force = 0.05;
     let boundary_distance = 0.5;
-    let boundary_force_strength = 0.2;
+    let boundary_force_strength = 0.5;
+    let mut fleet_target = Vec3::ZERO;
+
+    for t in query2.iter() {
+        fleet_target = t.position;
+    }
 
     struct Body {
         position: Vec3,
@@ -191,7 +220,7 @@ fn enemy_ai(
     }
 
     let mut body_map: HashMap<u32, Body> = HashMap::new();
-    for (entity, boid,  transform) in query.iter() {
+    for (entity, boid,  _) in query.iter() {
         body_map.insert(entity.index(), Body {
             position: boid.position,
             velocity: boid.velocity,
@@ -204,9 +233,13 @@ fn enemy_ai(
         let mut alignment = Vec3::ZERO;
         let mut cohesion = Vec3::ZERO;
         let mut boundary_force = Vec3::ZERO;
+        let mut fleet_force;
         let mut count = 0;
 
         for (other_entity, other_boid,  _) in query.iter() {
+            //if other_boid.flock_id != boid.flock_id {
+             //   continue;
+            //}
             if entity.index() != other_entity.index() {
                 let distance = boid.position.distance(other_boid.position);
 
@@ -235,20 +268,26 @@ fn enemy_ai(
             cohesion = (cohesion / count as f32) - boid.position;
             if cohesion.length() > 0.0 {
                 cohesion = cohesion.normalize() * max_speed - boid.velocity;
-                cohesion = cohesion.clamp_length_max(0.01);
+                cohesion = cohesion.clamp_length_max(cohesion_force);
             }
 
             if alignment.length() > 0.0 {
                 alignment = alignment.normalize() * max_speed - boid.velocity;
-                alignment = alignment.clamp_length_max(max_force);
+                alignment = alignment.clamp_length_max(alignment_force);
             }
             if separation.length()> 0.0 {
 
             separation = separation.normalize() * max_speed - boid.velocity;
-            separation = separation.clamp_length_max(max_force);
+            separation = separation.clamp_length_max(seperation_force);
         }
         }
 
+                // Fleet force calculation
+        fleet_force = fleet_target - boid.position;
+        if fleet_force.length() > 0.0 {
+            fleet_force = fleet_force.normalize() * max_speed - boid.velocity;
+            fleet_force = fleet_force.clamp_length_max(0.02);
+        }
                 // Boundary force calculation
                 if boid.position.x > BOUNDARY - boundary_distance {
                     boundary_force.x -= boundary_force_strength;
@@ -270,28 +309,16 @@ fn enemy_ai(
 
         //info!("sep ali coh {:?} {:?} {:?}",separation, alignment,cohesion);
 
-         tmp.velocity +=  (separation) + (alignment + cohesion) + boundary_force;
+         tmp.velocity +=  (separation) + (alignment + cohesion) + boundary_force + fleet_force;
          tmp.velocity = tmp.velocity.clamp_length_max(max_speed);
         tmp.position += tmp.velocity * time.delta_secs();
 
-        /* 
-        if tmp.position.x > BOUNDARY || tmp.position.x < -BOUNDARY {
-            tmp.velocity.x = -tmp.velocity.x;
-        } 
-        if tmp.position.y > BOUNDARY || tmp.position.y < -BOUNDARY {
-            tmp.velocity.y = -tmp.velocity.y;
-        } 
-        if tmp.position.z > BOUNDARY || tmp.position.z < -BOUNDARY {
-            tmp.velocity.z = -tmp.velocity.z;
-        } 
-        */
     }
 
-    for (entity, mut boid,   transform) in query.iter_mut() {
+    for (entity, mut boid,   _) in query.iter_mut() {
         let tmp =body_map.get(&entity.index()).unwrap();
         boid.position = tmp.position;
         boid.velocity = tmp.velocity;
         
-        //info!("vectors {:?} {:?} {:?}",entity.index(), boid.position, boid.velocity);
     }
 }
