@@ -1,7 +1,8 @@
-use bevy::{asset::RenderAssetUsages, color::palettes::{basic, css::{RED, SILVER, WHITE}}, log, pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin}, prelude::*, render::{mesh::{self, Indices, PrimitiveTopology, VertexAttributeValues}, settings::{RenderCreation, WgpuFeatures, WgpuSettings}, RenderPlugin}, scene::ron::de, utils::{info, HashMap}};
+use bevy::{asset::RenderAssetUsages, color::palettes::{basic, css::{RED, SILVER, WHITE}}, diagnostic::FrameTimeDiagnosticsPlugin, log, pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin}, prelude::*, render::{mesh::{self, Indices, PrimitiveTopology, VertexAttributeValues}, settings::{RenderCreation, WgpuFeatures, WgpuSettings}, RenderPlugin}, scene::ron::de, text::FontSmoothing, utils::{info, HashMap}};
+use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 //use bevy_rts_camera::{RtsCamera, RtsCameraControls, RtsCameraPlugin}
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
-use bevy_rapier3d::{plugin::{NoUserData, RapierContext, RapierPhysicsPlugin, ReadRapierContext}, prelude::{Collider, ComputedColliderShape, QueryFilter, Restitution, RigidBody}, render::{ColliderDebugColor, RapierDebugRenderPlugin}};
+use bevy_rapier3d::{plugin::{NoUserData, RapierContext, RapierPhysicsPlugin, ReadRapierContext}, prelude::{Collider, ComputedColliderShape, QueryFilter, Restitution, RigidBody, TriMeshFlags}, render::{ColliderDebugColor, RapierDebugRenderPlugin}};
 
 
 use std::f32::consts::PI;
@@ -26,7 +27,7 @@ struct BoidContext {
    //sboids : Vec<&Boid>,
 }
 
-const BOUNDARY: f32 = 5.0;
+const CAGE_SIZE: f32 = 20.0;
 
 
 const NUM_VIEW_DIRECTIONS: usize = 100; // Number of sample directions
@@ -123,9 +124,25 @@ fn create_wireframe_cube(x_length: f32, y_length: f32, z_length: f32) -> Mesh {
 fn main() {
     App::new()
     .add_plugins(DefaultPlugins{})
+    .add_plugins(            FpsOverlayPlugin {
+        config: FpsOverlayConfig {
+            text_config: TextFont {
+                // Here we define size of our overlay
+                font_size: 12.0,
+                // If we want, we can use a custom font
+                font: default(),
+                // We could also disable font smoothing,
+                font_smoothing: FontSmoothing::default(),
+            },
+            // We can also change color of the overlay
+            text_color: Color::WHITE,
+            enabled: true,
+        },
+    },)
+    
     .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
     .add_plugins(RapierDebugRenderPlugin::default())
-    .insert_resource(BoidContext{ count: 50, directions: generate_directions(180.0)})
+    .insert_resource(BoidContext{ count: 150, directions: generate_directions(180.0)})
     .add_plugins(PanOrbitCameraPlugin)
     .add_systems(Startup, setup_scene)
     .add_systems(Update, (update_target,sync_enemy_mesh_transform,enemy_ai) )
@@ -162,15 +179,16 @@ fn setup_scene(mut commands: Commands,
             boid_mesh.clone(),
             boid_mat.clone(),
             Transform::from_xyz(x, y, z),
-        )).insert(RigidBody::KinematicPositionBased)
-        .insert(Collider::cone(0.3/2.0,0.1))
-        .insert(Restitution::coefficient(0.7));
+        ));
+        //.insert(RigidBody::KinematicPositionBased)
+        //.insert(Collider::cone(0.3/2.0,0.1))
+        //.insert(Restitution::coefficient(0.7));
         
     }
     
 
     // cube wireframe
-   let mesh = create_wireframe_cube(10.0, 10.0, 10.0);
+   let mesh = create_wireframe_cube(CAGE_SIZE, CAGE_SIZE, CAGE_SIZE);
    commands.spawn((
     Mesh3d(meshes.add(mesh)),
     MeshMaterial3d(materials.add(StandardMaterial {
@@ -181,19 +199,20 @@ fn setup_scene(mut commands: Commands,
      Transform::from_xyz(0.0, 0.0, 0.0),
 ));
 
-let t = Torus::new(2.0, 3.0);
-    //let mesh = meshes.add(Torus::new(1.0, 0.3, 10, 10));
-    //let material = materials.add(Color::rgb(0.8, 0.7, 0.6).into());
-    //let transform = Transform::from_xyz(0.0, 0.0, 0.0);
-    //commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), transform));
-
-//let c= Collider::from_bevy_mesh(t, ComputedColliderShape::TriMesh(()));
    //physics
+   for i in 0..3 {
+
+   
+   let t_mesh = meshes.add(Torus::new(2.0+i as f32, 3.0+i as f32));
+   let col= Collider::from_bevy_mesh(&meshes.get(t_mesh.id()).unwrap(), &ComputedColliderShape::TriMesh(TriMeshFlags::all())).unwrap();
+   
    commands.spawn(RigidBody::Fixed)
-        .insert(Collider::ball(2.0))
-        .insert(Mesh3d(meshes.add( t)))
+        .insert(col)
+        .insert(Mesh3d(t_mesh))
         .insert(MeshMaterial3d(materials.add(Color::WHITE)))
-        .insert(Transform::from_xyz(0.0, -4.0, 0.0));
+        .insert(Transform::from_xyz(0.0, -4.0*i as f32, 0.0));
+
+   }
 
 
     // lights
@@ -244,7 +263,7 @@ fn update_target(
 ) {
     let t=time.elapsed().as_secs_f32();
     for (mut target, mut transform) in query.iter_mut() {
-        target.position = Vec3::new(t.sin()*3.0, t.cos()*4.0, t.sin()*3.0 * t.cos() );
+        target.position = Vec3::new(t.sin()*5.0, t.cos()*5.0, t.sin()*3.0 * t.cos() );
         //target.
         transform.translation = target.position;
     }
@@ -345,22 +364,23 @@ fn enemy_ai(mut commands: Commands,
         fleet_force = fleet_target - boid.position;
         if fleet_force.length() > 0.0 {
             fleet_force = fleet_force.normalize() * max_speed - boid.velocity;
-            fleet_force = fleet_force.clamp_length_max(0.06);
+            fleet_force = fleet_force.clamp_length_max(0.09);
         }
+                let half_cage = CAGE_SIZE/2.0;
                 // Boundary force calculation
-                if boid.position.x > BOUNDARY - boundary_distance {
+                if boid.position.x > half_cage - boundary_distance {
                     boundary_force.x -= boundary_force_strength;
-                } else if boid.position.x < -BOUNDARY + boundary_distance {
+                } else if boid.position.x < -half_cage + boundary_distance {
                     boundary_force.x += boundary_force_strength;
                 }
-                if boid.position.y > BOUNDARY - boundary_distance {
+                if boid.position.y > half_cage - boundary_distance {
                     boundary_force.y -= boundary_force_strength;
-                } else if boid.position.y < -BOUNDARY + boundary_distance {
+                } else if boid.position.y < -half_cage + boundary_distance {
                     boundary_force.y += boundary_force_strength;
                 }
-                if boid.position.z > BOUNDARY - boundary_distance {
+                if boid.position.z > half_cage - boundary_distance {
                     boundary_force.z -= boundary_force_strength;
-                } else if boid.position.z < -BOUNDARY + boundary_distance {
+                } else if boid.position.z < -half_cage + boundary_distance {
                     boundary_force.z += boundary_force_strength;
                 }
         //ray casting
@@ -368,7 +388,7 @@ fn enemy_ai(mut commands: Commands,
         //let free_dir = boid.velocity;
 
         //do we collide
-        let hit = rapier.cast_ray(boid.position,boid.velocity, f32::MAX, true, QueryFilter::only_fixed());
+        let hit = rapier.cast_ray(boid.position,boid.velocity, 4.0, true, QueryFilter::only_fixed());
         if let Some((entity,_toi)) = hit {
 
                 let free_dir = unobstructed_dir(&rapier, &context.directions, &boid.position, &boid.velocity);
@@ -393,7 +413,7 @@ fn enemy_ai(mut commands: Commands,
 
 fn unobstructed_dir(conrext: &RapierContext, look_dirs: &Vec<Vec3>, location: &Vec3, forward: &Vec3) -> Vec3 {
     for dir in look_dirs.iter() {
-        let hit = conrext.cast_ray(*location, *dir, f32::MAX, true, QueryFilter::only_fixed());
+        let hit = conrext.cast_ray(*location, *dir, 4.0, true, QueryFilter::only_fixed());
         if hit.is_none() {
             return *dir;
         }
