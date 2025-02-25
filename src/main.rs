@@ -1,12 +1,11 @@
 use bevy::{asset::RenderAssetUsages, color::palettes::{basic, css::{RED, SILVER, WHITE}}, diagnostic::FrameTimeDiagnosticsPlugin, log, pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin}, prelude::*, render::{mesh::{self, Indices, PrimitiveTopology, VertexAttributeValues}, settings::{RenderCreation, WgpuFeatures, WgpuSettings}, RenderPlugin}, scene::ron::de, text::FontSmoothing, utils::{info, HashMap}};
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
+use bevy_egui::{egui, EguiContexts, EguiPlugin};
 //use bevy_rts_camera::{RtsCamera, RtsCameraControls, RtsCameraPlugin}
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
 use bevy_rapier3d::{plugin::{NoUserData, RapierContext, RapierPhysicsPlugin, ReadRapierContext}, prelude::{Collider, ComputedColliderShape, QueryFilter, Restitution, RigidBody, TriMeshFlags}, render::{ColliderDebugColor, RapierDebugRenderPlugin}};
 
-
 use std::f32::consts::PI;
-
 
 #[derive(Component)]
 struct Boid {
@@ -21,62 +20,39 @@ struct Target {
 }
 
 #[derive(Resource)]
-struct BoidContext {
-   count : u8,
+struct BoidSettings {
+   count : u16,
    directions : Vec<Vec3>,
+   cohesion_force:   f32,
+   separation_force: f32,
+   alignment_force: f32,
+   follow_target: bool,
    //sboids : Vec<&Boid>,
 }
 
 const CAGE_SIZE: f32 = 20.0;
-
-
 const NUM_VIEW_DIRECTIONS: usize = 100; // Number of sample directions
 
- 
-
 pub fn generate_directions(visible_angle: f32) -> Vec<Vec3> {
-
     let mut directions = Vec::new();
-
     let golden_ratio = (1.0 + 5.0_f32.sqrt()) / 2.0;
-
     let angle_increment = std::f32::consts::PI * 2.0 * golden_ratio;
-
     let cos_threshold = (visible_angle.to_radians() / 2.0).cos(); // Cosine of half FOV
 
- 
-
     for i in 0..NUM_VIEW_DIRECTIONS {
-
         let t = i as f32 / NUM_VIEW_DIRECTIONS as f32;
-
         let inclination = (1.0 - 2.0 * t).acos();
-
         let azimuth = angle_increment * i as f32;
-
- 
-
         let x = inclination.sin() * azimuth.cos();
-
         let y = inclination.sin() * azimuth.sin();
-
         let z = inclination.cos();
-
         let dir = Vec3::new(x, y, z);
-
- 
-
         // Only keep directions within the field of view
-
         if dir.dot(Vec3::Z) >= cos_threshold {
-
-            directions.push(dir);
-
+          directions.push(dir);
         }
-
     }
     directions
-
 }
 
 
@@ -127,32 +103,35 @@ fn main() {
     .add_plugins(            FpsOverlayPlugin {
         config: FpsOverlayConfig {
             text_config: TextFont {
-                // Here we define size of our overlay
                 font_size: 12.0,
-                // If we want, we can use a custom font
                 font: default(),
-                // We could also disable font smoothing,
                 font_smoothing: FontSmoothing::default(),
             },
-            // We can also change color of the overlay
             text_color: Color::WHITE,
             enabled: true,
         },
     },)
-    
+    .add_plugins(EguiPlugin)
     .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
-    .add_plugins(RapierDebugRenderPlugin::default())
-    .insert_resource(BoidContext{ count: 150, directions: generate_directions(180.0)})
+    .insert_resource(BoidSettings{ 
+        count: 500,
+        directions: generate_directions(180.0),
+        cohesion_force: 0.02,
+        separation_force: 0.08,
+        alignment_force: 0.06,
+        follow_target: true,
+    })
     .add_plugins(PanOrbitCameraPlugin)
     .add_systems(Startup, setup_scene)
-    .add_systems(Update, (update_target,sync_enemy_mesh_transform,enemy_ai) )
+    .add_systems(Update, (ui_update,update_target,sync_enemy_mesh_transform,enemy_ai) )
     .run();
+
 }
 
 fn setup_scene(mut commands: Commands,
         mut meshes: ResMut<Assets<Mesh>>,
         mut materials: ResMut<Assets<StandardMaterial>>,
-        context : ResMut<BoidContext>,
+        context : ResMut<BoidSettings>,
        ) {
 
     commands.spawn(Target {
@@ -173,7 +152,6 @@ fn setup_scene(mut commands: Commands,
             velocity: Vec3::ZERO,
             flock_id: (i % 3) as u16,
         };
-        //context.boids.push(boid);
         commands.spawn(boid)
         .insert((
             boid_mesh.clone(),
@@ -187,11 +165,11 @@ fn setup_scene(mut commands: Commands,
     }
     
 
-    // cube wireframe
+// cube wireframe
    let mesh = create_wireframe_cube(CAGE_SIZE, CAGE_SIZE, CAGE_SIZE);
    commands.spawn((
-    Mesh3d(meshes.add(mesh)),
-    MeshMaterial3d(materials.add(StandardMaterial {
+   Mesh3d(meshes.add(mesh)),
+   MeshMaterial3d(materials.add(StandardMaterial {
         base_color: WHITE.into(),
         unlit : true,
         ..Default::default()
@@ -199,11 +177,10 @@ fn setup_scene(mut commands: Commands,
      Transform::from_xyz(0.0, 0.0, 0.0),
 ));
 
-   //physics
-   for i in 0..3 {
+//physics
+for i in 0..3 {
 
-   
-   let t_mesh = meshes.add(Torus::new(2.0+i as f32, 3.0+i as f32));
+   let t_mesh = meshes.add(Torus::new(2.0+(i as f32 *2.0), 3.0+(i as f32*2.0) ));
    let col= Collider::from_bevy_mesh(&meshes.get(t_mesh.id()).unwrap(), &ComputedColliderShape::TriMesh(TriMeshFlags::all())).unwrap();
    
    commands.spawn(RigidBody::Fixed)
@@ -212,12 +189,12 @@ fn setup_scene(mut commands: Commands,
         .insert(MeshMaterial3d(materials.add(Color::WHITE)))
         .insert(Transform::from_xyz(0.0, -4.0*i as f32, 0.0));
 
-   }
+}
 
 
-    // lights
-    // directional 'sun' light
-    commands.spawn((
+// lights
+// directional 'sun' light
+commands.spawn((
         DirectionalLight {
             illuminance: light_consts::lux::OVERCAST_DAY,
             shadows_enabled: true,
@@ -245,6 +222,18 @@ fn setup_scene(mut commands: Commands,
 
 }
 
+fn ui_update(mut contexts: EguiContexts,
+    mut boid_config : ResMut<BoidSettings>) {
+        
+    egui::Window::new("BevyBoids").show(contexts.ctx_mut(), |ui| {
+        //ui.label("world");
+        ui.add(egui::Slider::new(&mut boid_config.cohesion_force, 0.00..=1.00).text("cohesion"));
+        ui.add(egui::Slider::new(&mut boid_config.alignment_force, 0.00..=1.00).text("alignment"));
+        ui.add(egui::Slider::new(&mut boid_config.separation_force, 0.00..=1.00).text("seperation"));
+        ui.add(egui::Checkbox::new(&mut boid_config.follow_target, "follow target"));
+    });
+}
+
 fn sync_enemy_mesh_transform(
     mut query: Query<(&Boid, &mut Transform)>,
 ) {
@@ -264,33 +253,31 @@ fn update_target(
     let t=time.elapsed().as_secs_f32();
     for (mut target, mut transform) in query.iter_mut() {
         target.position = Vec3::new(t.sin()*5.0, t.cos()*5.0, t.sin()*3.0 * t.cos() );
-        //target.
         transform.translation = target.position;
     }
 }
 
-fn enemy_ai(mut commands: Commands,
-    mut query: Query<(Entity, &mut Boid, &mut Transform)>,
-    query2: Query<&Target>,
+fn enemy_ai(commands: Commands,
+    mut query_enemies: Query<(Entity, &mut Boid, &mut Transform)>,
+    query_target: Query<&Target>,
     rapier_context: ReadRapierContext,
     time: Res<Time>,
-    context : ResMut<BoidContext>
+    context : ResMut<BoidSettings>
 ) {
     let rapier = rapier_context.single();
     let separation_distance = 1.0;
     let alignment_distance = 1.0;
     let cohesion_distance = 1.5;
-    let cohesion_force = 0.02;
-    let seperation_force = 0.08;
-    let alignment_force = 0.06;
+    let cohesion_force = context.cohesion_force;
+    let seperation_force = context.separation_force;
+    let alignment_force = context.alignment_force;
     let max_speed = 4.0;
     let boundary_distance = 0.5;
     let boundary_force_strength = 0.5;
-    let mut fleet_target = Vec3::ZERO;
-
-    for t in query2.iter() {
-        fleet_target = t.position;
-    }
+    
+    let target = query_target.single();
+    let mut fleet_target = target.position;
+    
 
     struct Body {
         position: Vec3,
@@ -298,7 +285,7 @@ fn enemy_ai(mut commands: Commands,
     }
 
     let mut body_map: HashMap<u32, Body> = HashMap::new();
-    for (entity, boid,  _) in query.iter() {
+    for (entity, boid,  _) in query_enemies.iter() {
         body_map.insert(entity.index(), Body {
             position: boid.position,
             velocity: boid.velocity,
@@ -306,7 +293,7 @@ fn enemy_ai(mut commands: Commands,
     }
     
 
-    for (entity, boid,  _) in query.iter() {
+    for (entity, boid,  _) in query_enemies.iter() {
         let mut separation = Vec3::ZERO;
         let mut alignment = Vec3::ZERO;
         let mut cohesion = Vec3::ZERO;
@@ -314,7 +301,7 @@ fn enemy_ai(mut commands: Commands,
         let mut fleet_force;
         let mut count = 0;
 
-        for (other_entity, other_boid,  _) in query.iter() {
+        for (other_entity, other_boid,  _) in query_enemies.iter() {
             //if other_boid.flock_id != boid.flock_id {
              //   continue;
             //}
@@ -360,12 +347,14 @@ fn enemy_ai(mut commands: Commands,
         }
         }
 
-                // Fleet force calculation
+         // Fleet force calculation
+        
         fleet_force = fleet_target - boid.position;
         if fleet_force.length() > 0.0 {
             fleet_force = fleet_force.normalize() * max_speed - boid.velocity;
             fleet_force = fleet_force.clamp_length_max(0.09);
         }
+                
                 let half_cage = CAGE_SIZE/2.0;
                 // Boundary force calculation
                 if boid.position.x > half_cage - boundary_distance {
@@ -389,21 +378,22 @@ fn enemy_ai(mut commands: Commands,
 
         //do we collide
         let hit = rapier.cast_ray(boid.position,boid.velocity, 4.0, true, QueryFilter::only_fixed());
-        if let Some((entity,_toi)) = hit {
-
+        if let Some((_,_toi)) = hit {
                 let free_dir = unobstructed_dir(&rapier, &context.directions, &boid.position, &boid.velocity);
-                separation += separation + free_dir;
-            
+                separation += separation + free_dir;    
         }
 
         let tmp = body_map.get_mut(&entity.index()).unwrap();
-        tmp.velocity +=  (separation) + (alignment + cohesion) + boundary_force + fleet_force;
+        tmp.velocity +=  (separation) + (alignment + cohesion) + boundary_force;
+        if (context.follow_target) {
+            tmp.velocity += (fleet_force);
+        }
         tmp.velocity = tmp.velocity.clamp_length_max(max_speed);
         tmp.position += tmp.velocity * time.delta_secs();
 
     }
 
-    for (entity, mut boid,   _) in query.iter_mut() {
+    for (entity, mut boid,   _) in query_enemies.iter_mut() {
         let tmp =body_map.get(&entity.index()).unwrap();
         boid.position = tmp.position;
         boid.velocity = tmp.velocity;
@@ -411,12 +401,12 @@ fn enemy_ai(mut commands: Commands,
     }
 }
 
-fn unobstructed_dir(conrext: &RapierContext, look_dirs: &Vec<Vec3>, location: &Vec3, forward: &Vec3) -> Vec3 {
+fn unobstructed_dir<'a>(conrext: &RapierContext, look_dirs: &'a Vec<Vec3>, location: &Vec3, forward: &'a Vec3) -> &'a Vec3 {
     for dir in look_dirs.iter() {
         let hit = conrext.cast_ray(*location, *dir, 4.0, true, QueryFilter::only_fixed());
         if hit.is_none() {
-            return *dir;
+            return dir;
         }
     }
-    *forward
+    forward
 }

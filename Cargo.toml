@@ -1,5 +1,5 @@
 [package]
-name = "hello_world"
+name = "bevy_boids"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,4 +9,5 @@ bevy = "0.15.0"
 bevy_panorbit_camera = "0.23.0"
 bevy_rapier3d = "0.29.0"
 bevy_dev_tools = "0.15.3"
+bevy_egui = "0.33"
 #noise = "0.9.0"
