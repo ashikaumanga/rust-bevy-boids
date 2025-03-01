@@ -1,4 +1,4 @@
-use bevy::{asset::RenderAssetUsages, color::palettes::{basic, css::{RED, SILVER, WHITE}}, diagnostic::FrameTimeDiagnosticsPlugin, log, pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin}, prelude::*, render::{mesh::{self, Indices, PrimitiveTopology, VertexAttributeValues}, settings::{RenderCreation, WgpuFeatures, WgpuSettings}, RenderPlugin}, scene::ron::de, text::FontSmoothing, utils::{info, HashMap}};
+use bevy::{asset::RenderAssetUsages, color::palettes::{basic, css::{RED, SILVER, WHITE}}, diagnostic::FrameTimeDiagnosticsPlugin, log, math::VectorSpace, pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin}, prelude::*, render::{mesh::{self, Indices, PrimitiveTopology, VertexAttributeValues}, settings::{RenderCreation, WgpuFeatures, WgpuSettings}, RenderPlugin}, scene::ron::de, text::FontSmoothing, utils::{info, HashMap}};
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
 //use bevy_rts_camera::{RtsCamera, RtsCameraControls, RtsCameraPlugin}
@@ -19,14 +19,28 @@ struct Target {
     position : Vec3,
 }
 
+enum SelectedDistance {
+    None,
+    Separation,
+    Alignment,
+    Cohesion,
+}
+
 #[derive(Resource)]
 struct BoidSettings {
    count : u16,
-   directions : Vec<Vec3>,
+   raycasy_directions : Vec<Vec3>,
+   //forces
    cohesion_force:   f32,
    separation_force: f32,
    alignment_force: f32,
+   //distances
+   separation_distance: f32,
+   alignment_distance: f32,
+   cohesion_distance: f32,
+   max_speed: f32,
    follow_target: bool,
+   selected_distance: SelectedDistance
    //sboids : Vec<&Boid>,
 }
 
@@ -115,15 +129,20 @@ fn main() {
     .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
     .insert_resource(BoidSettings{ 
         count: 500,
-        directions: generate_directions(180.0),
+        raycasy_directions: generate_directions(180.0),
         cohesion_force: 0.02,
         separation_force: 0.08,
         alignment_force: 0.06,
+        separation_distance: 1.0,
+        alignment_distance: 1.0,
+        cohesion_distance: 1.5,
+        max_speed: 4.0,
         follow_target: true,
+        selected_distance: SelectedDistance::None
     })
     .add_plugins(PanOrbitCameraPlugin)
     .add_systems(Startup, setup_scene)
-    .add_systems(Update, (ui_update,update_target,sync_enemy_mesh_transform,enemy_ai) )
+    .add_systems(Update, (gizmos,ui_update,update_target,sync_enemy_mesh_transform,enemy_ai) )
     .run();
 
 }
@@ -134,11 +153,13 @@ fn setup_scene(mut commands: Commands,
         context : ResMut<BoidSettings>,
        ) {
 
+        
+
     commands.spawn(Target {
         position: Vec3::new(0.0, 0.0, 0.0),
-    }).insert((Mesh3d(meshes.add(Cuboid::new(0.3, 0.3,0.3))),
-                      MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 155))),
-                      Transform::from_xyz(0.0, 0.5, 0.0)));
+    }).insert((Mesh3d(meshes.add(Sphere::new(0.3))),
+                      MeshMaterial3d(materials.add(Color::linear_rgba(1.0, 0.0, 0.0, 1.0))),
+                      Transform::from_xyz(0.0, 0.3, 0.0)));
 
     let boid_mesh = Mesh3d(meshes.add(Cone::new(0.1, 0.3)));
     let boid_mat = MeshMaterial3d(materials.add(Color::srgb_u8(124, 144, 255)));
@@ -178,15 +199,19 @@ fn setup_scene(mut commands: Commands,
 ));
 
 //physics
+let obsticle_colors = [Color::srgb_u8(255, 198, 174),
+                          Color::srgb_u8(186, 156, 202),
+                          Color::srgb_u8(115, 143, 182)];
+
 for i in 0..3 {
 
    let t_mesh = meshes.add(Torus::new(2.0+(i as f32 *2.0), 3.0+(i as f32*2.0) ));
-   let col= Collider::from_bevy_mesh(&meshes.get(t_mesh.id()).unwrap(), &ComputedColliderShape::TriMesh(TriMeshFlags::all())).unwrap();
+   let t_mesh_collider= Collider::from_bevy_mesh(&meshes.get(t_mesh.id()).unwrap(), &ComputedColliderShape::TriMesh(TriMeshFlags::all())).unwrap();
    
    commands.spawn(RigidBody::Fixed)
-        .insert(col)
+        .insert(t_mesh_collider)
         .insert(Mesh3d(t_mesh))
-        .insert(MeshMaterial3d(materials.add(Color::WHITE)))
+        .insert(MeshMaterial3d(materials.add(obsticle_colors[i % 3])))
         .insert(Transform::from_xyz(0.0, -4.0*i as f32, 0.0));
 
 }
@@ -225,12 +250,31 @@ commands.spawn((
 fn ui_update(mut contexts: EguiContexts,
     mut boid_config : ResMut<BoidSettings>) {
         
-    egui::Window::new("BevyBoids").show(contexts.ctx_mut(), |ui| {
-        //ui.label("world");
+    egui::Window::new("Bevy Boids").max_width(140.0).show(contexts.ctx_mut(), |ui| {
         ui.add(egui::Slider::new(&mut boid_config.cohesion_force, 0.00..=1.00).text("cohesion"));
         ui.add(egui::Slider::new(&mut boid_config.alignment_force, 0.00..=1.00).text("alignment"));
         ui.add(egui::Slider::new(&mut boid_config.separation_force, 0.00..=1.00).text("seperation"));
+        ui.add(egui::Separator::default());
+        let res_coh = ui.add(egui::Slider::new(&mut boid_config.cohesion_distance, 0.00..=2.00).text("cohesion distance"));
+        let res_ali = ui.add(egui::Slider::new(&mut boid_config.alignment_distance, 0.00..=2.00).text("alignment distance"));
+        let res_sep = ui.add(egui::Slider::new(&mut boid_config.separation_distance, 0.00..=2.00).text("seperation distance"));
+        ui.add(egui::Separator::default());
+        ui.add(egui::Slider::new(&mut boid_config.max_speed, 0.50..=10.00).text("max speed"));
         ui.add(egui::Checkbox::new(&mut boid_config.follow_target, "follow target"));
+        boid_config.selected_distance = SelectedDistance::None;
+        if res_coh.hovered() {
+            //info!("Cohesion distance hovered");
+            boid_config.selected_distance = SelectedDistance::Cohesion;
+        }
+        if res_ali.hovered() {
+            //info!("Aligment distance hovered");
+            boid_config.selected_distance = SelectedDistance::Alignment;
+        }
+        if res_sep.hovered() {
+            //info!("Seperated distance hovered");
+            boid_config.selected_distance = SelectedDistance::Separation;
+        }
+        
     });
 }
 
@@ -257,26 +301,56 @@ fn update_target(
     }
 }
 
+fn gizmos(mut gizmos: Gizmos,
+    query_enemies: Query<(Entity, &mut Boid, &mut Transform)>,
+    settings : ResMut<BoidSettings>) {
+    let selected_d = &settings.selected_distance;
+
+    let first_enemy = query_enemies.iter().next().unwrap();
+    match selected_d{
+        SelectedDistance::Separation => {
+            gizmos.arrow(first_enemy.1.position, 
+                first_enemy.1.position + first_enemy.1.velocity.normalize() * settings.separation_distance,  
+                Color::srgb(0.0, 0.0, 1.0));
+        }
+        SelectedDistance::Alignment => {
+            gizmos.arrow(first_enemy.1.position, 
+                first_enemy.1.position + first_enemy.1.velocity.normalize() * settings.alignment_distance,  
+                Color::srgb(1.0, 0.0, 0.0));
+        } SelectedDistance::Cohesion => {
+            gizmos.arrow(first_enemy.1.position, 
+                first_enemy.1.position + first_enemy.1.velocity.normalize() * settings.cohesion_distance,  
+                Color::srgb(0.0, 1.0, 0.0));
+        }
+        
+        _ => {},
+    }
+    
+}
+
 fn enemy_ai(commands: Commands,
     mut query_enemies: Query<(Entity, &mut Boid, &mut Transform)>,
     query_target: Query<&Target>,
     rapier_context: ReadRapierContext,
     time: Res<Time>,
-    context : ResMut<BoidSettings>
+    settings : ResMut<BoidSettings>
 ) {
     let rapier = rapier_context.single();
-    let separation_distance = 1.0;
-    let alignment_distance = 1.0;
-    let cohesion_distance = 1.5;
-    let cohesion_force = context.cohesion_force;
-    let seperation_force = context.separation_force;
-    let alignment_force = context.alignment_force;
-    let max_speed = 4.0;
+    //distances
+    let separation_distance = settings.separation_distance;
+    let alignment_distance = settings.alignment_distance;
+    let cohesion_distance = settings.cohesion_distance;
+    //forces
+    let cohesion_force = settings.cohesion_force;
+    let seperation_force = settings.separation_force;
+    let alignment_force = settings.alignment_force;
+    //max speed
+    let max_speed = settings.max_speed;
     let boundary_distance = 0.5;
     let boundary_force_strength = 0.5;
     
     let target = query_target.single();
-    let mut fleet_target = target.position;
+    let fleet_target = target.position;
     
 
     struct Body {
@@ -292,14 +366,13 @@ fn enemy_ai(commands: Commands,
         });
     }
     
-
     for (entity, boid,  _) in query_enemies.iter() {
         let mut separation = Vec3::ZERO;
         let mut alignment = Vec3::ZERO;
         let mut cohesion = Vec3::ZERO;
         let mut boundary_force = Vec3::ZERO;
         let mut fleet_force;
-        let mut count = 0;
+        let mut neighbor_count = 0;
 
         for (other_entity, other_boid,  _) in query_enemies.iter() {
             //if other_boid.flock_id != boid.flock_id {
@@ -311,26 +384,27 @@ fn enemy_ai(commands: Commands,
                 if distance < separation_distance && distance > 0.0 {
                     let diff = boid.position - other_boid.position;
                     separation += diff.normalize() / distance;
+                    neighbor_count += 1;
                 }
 
                 if distance < alignment_distance {
                     alignment += other_boid.velocity;
+                    neighbor_count += 1;
                 }
 
                 if distance < cohesion_distance {
                     cohesion += other_boid.position;
+                    neighbor_count += 1;
                 }
-
-                count += 1;
             }
         }
 
-        if count > 0 {
-            separation /= count as f32;
-            alignment /= count as f32;
-            cohesion /= count as f32;
+        if neighbor_count > 0 {
+            separation /= neighbor_count as f32;
+            alignment /= neighbor_count as f32;
+            cohesion /= neighbor_count as f32;
 
-            cohesion = (cohesion / count as f32) - boid.position;
+            cohesion = cohesion - boid.position;
             if cohesion.length() > 0.0 {
                 cohesion = cohesion.normalize() * max_speed - boid.velocity;
                 cohesion = cohesion.clamp_length_max(cohesion_force);
@@ -379,14 +453,14 @@ fn enemy_ai(commands: Commands,
         //do we collide
         let hit = rapier.cast_ray(boid.position,boid.velocity, 4.0, true, QueryFilter::only_fixed());
         if let Some((_,_toi)) = hit {
-                let free_dir = unobstructed_dir(&rapier, &context.directions, &boid.position, &boid.velocity);
-                separation += separation + free_dir;    
+                let free_dir = unobstructed_dir(&rapier, &settings.raycasy_directions, &boid.position, &boid.velocity);
+                separation += free_dir;    
         }
 
         let tmp = body_map.get_mut(&entity.index()).unwrap();
         tmp.velocity +=  (separation) + (alignment + cohesion) + boundary_force;
-        if (context.follow_target) {
-            tmp.velocity += (fleet_force);
+        if settings.follow_target {
+            tmp.velocity += fleet_force;
         }
         tmp.velocity = tmp.velocity.clamp_length_max(max_speed);
         tmp.position += tmp.velocity * time.delta_secs();
