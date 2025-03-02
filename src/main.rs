@@ -1,9 +1,11 @@
-use bevy::{asset::RenderAssetUsages, color::palettes::{basic, css::{RED, SILVER, WHITE}}, diagnostic::FrameTimeDiagnosticsPlugin, log, math::VectorSpace, pbr::wireframe::{Wireframe, WireframeConfig, WireframePlugin}, prelude::*, render::{mesh::{self, Indices, PrimitiveTopology, VertexAttributeValues}, settings::{RenderCreation, WgpuFeatures, WgpuSettings}, RenderPlugin}, scene::ron::de, text::FontSmoothing, utils::{info, HashMap}};
+mod ray_casting_utils;
+mod mesh_utils;
+
+use bevy::{color::palettes::css::WHITE, prelude::*, text::FontSmoothing, utils::HashMap};
 use bevy_dev_tools::fps_overlay::{FpsOverlayConfig, FpsOverlayPlugin};
 use bevy_egui::{egui, EguiContexts, EguiPlugin};
-//use bevy_rts_camera::{RtsCamera, RtsCameraControls, RtsCameraPlugin}
 use bevy_panorbit_camera::{PanOrbitCamera, PanOrbitCameraPlugin};
-use bevy_rapier3d::{plugin::{NoUserData, RapierContext, RapierPhysicsPlugin, ReadRapierContext}, prelude::{Collider, ComputedColliderShape, QueryFilter, Restitution, RigidBody, TriMeshFlags}, render::{ColliderDebugColor, RapierDebugRenderPlugin}};
+use bevy_rapier3d::{plugin::{NoUserData, RapierPhysicsPlugin, ReadRapierContext}, prelude::{Collider, ComputedColliderShape, QueryFilter, RigidBody, TriMeshFlags}};
 
 use std::f32::consts::PI;
 
@@ -11,19 +13,11 @@ use std::f32::consts::PI;
 struct Boid {
     position: Vec3,
     velocity: Vec3,
-    flock_id : u16
 }
 
 #[derive(Component)]
 struct Target {
     position : Vec3,
-}
-
-enum SelectedDistance {
-    None,
-    Separation,
-    Alignment,
-    Cohesion,
 }
 
 #[derive(Resource)]
@@ -43,73 +37,14 @@ struct BoidSettings {
    selected_distance: SelectedDistance
    //sboids : Vec<&Boid>,
 }
+enum SelectedDistance {
+    None,
+    Separation,
+    Alignment,
+    Cohesion,
+}
 
 const CAGE_SIZE: f32 = 20.0;
-const NUM_VIEW_DIRECTIONS: usize = 100; // Number of sample directions
-
-pub fn generate_directions(visible_angle: f32) -> Vec<Vec3> {
-    let mut directions = Vec::new();
-    let golden_ratio = (1.0 + 5.0_f32.sqrt()) / 2.0;
-    let angle_increment = std::f32::consts::PI * 2.0 * golden_ratio;
-    let cos_threshold = (visible_angle.to_radians() / 2.0).cos(); // Cosine of half FOV
-
-    for i in 0..NUM_VIEW_DIRECTIONS {
-        let t = i as f32 / NUM_VIEW_DIRECTIONS as f32;
-        let inclination = (1.0 - 2.0 * t).acos();
-        let azimuth = angle_increment * i as f32;
-        let x = inclination.sin() * azimuth.cos();
-        let y = inclination.sin() * azimuth.sin();
-        let z = inclination.cos();
-        let dir = Vec3::new(x, y, z);
-        // Only keep directions within the field of view
-        if dir.dot(Vec3::Z) >= cos_threshold {
-          directions.push(dir);
-        }
-    }
-    directions
-}
-
-
-fn create_wireframe_cube(x_length: f32, y_length: f32, z_length: f32) -> Mesh {
-    let half_x = x_length / 2.0;
-    let half_y = y_length / 2.0;
-    let half_z = z_length / 2.0;
-
-    let vertices: Vec<Vec3> = vec![
-        Vec3::new(-half_x, -half_y, -half_z), // 0
-        Vec3::new( half_x, -half_y, -half_z), // 1
-        Vec3::new( half_x,  half_y, -half_z), // 2
-        Vec3::new(-half_x,  half_y, -half_z), // 3
-        Vec3::new(-half_x, -half_y,  half_z), // 4
-        Vec3::new( half_x, -half_y,  half_z), // 5
-        Vec3::new( half_x,  half_y,  half_z), // 6
-        Vec3::new(-half_x,  half_y,  half_z), // 7
-    ];
-
-    let edges: Vec<(usize, usize)> = vec![
-        (0, 1), (1, 2), (2, 3), (3, 0), // Bottom face
-        (4, 5), (5, 6), (6, 7), (7, 4), // Top face
-        (0, 4), (1, 5), (2, 6), (3, 7), // Vertical edges
-    ];
-
-    let mut line_positions: Vec<[f32; 3]> = Vec::new();
-    let mut indices: Vec<u32> = Vec::new();
-
-    for (start, end) in edges {
-        let start_idx = line_positions.len() as u32;
-        line_positions.push(vertices[start].into());
-        line_positions.push(vertices[end].into());
-        indices.push(start_idx);
-        indices.push(start_idx + 1);
-    }
-
-    
-    let mut mesh = Mesh::new(PrimitiveTopology::LineList, default());
-    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, line_positions);
-    mesh.insert_indices(Indices::U32(indices));
-    mesh
-}
-
 
 fn main() {
     App::new()
@@ -129,7 +64,7 @@ fn main() {
     .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
     .insert_resource(BoidSettings{ 
         count: 500,
-        raycasy_directions: generate_directions(180.0),
+        raycasy_directions: ray_casting_utils::generate_directions(1500, 270.0),
         cohesion_force: 0.02,
         separation_force: 0.08,
         alignment_force: 0.06,
@@ -142,7 +77,7 @@ fn main() {
     })
     .add_plugins(PanOrbitCameraPlugin)
     .add_systems(Startup, setup_scene)
-    .add_systems(Update, (gizmos,ui_update,update_target,sync_enemy_mesh_transform,enemy_ai) )
+    .add_systems(Update, (draw_selected_distance_arrow,ui_update,update_target_mesh,updates_boids_mesh,update_boid_physics) )
     .run();
 
 }
@@ -152,9 +87,6 @@ fn setup_scene(mut commands: Commands,
         mut materials: ResMut<Assets<StandardMaterial>>,
         context : ResMut<BoidSettings>,
        ) {
-
-        
-
     commands.spawn(Target {
         position: Vec3::new(0.0, 0.0, 0.0),
     }).insert((Mesh3d(meshes.add(Sphere::new(0.3))),
@@ -171,23 +103,18 @@ fn setup_scene(mut commands: Commands,
         let boid = Boid {
             position: Vec3::new(x.sin()*2.0, x.cos()*2.0, z),
             velocity: Vec3::ZERO,
-            flock_id: (i % 3) as u16,
         };
         commands.spawn(boid)
         .insert((
             boid_mesh.clone(),
             boid_mat.clone(),
             Transform::from_xyz(x, y, z),
-        ));
-        //.insert(RigidBody::KinematicPositionBased)
-        //.insert(Collider::cone(0.3/2.0,0.1))
-        //.insert(Restitution::coefficient(0.7));
-        
+        ));   
     }
     
 
-// cube wireframe
-   let mesh = create_wireframe_cube(CAGE_SIZE, CAGE_SIZE, CAGE_SIZE);
+// cage wireframe
+   let mesh = mesh_utils::create_wireframe_cube(CAGE_SIZE, CAGE_SIZE, CAGE_SIZE);
    commands.spawn((
    Mesh3d(meshes.add(mesh)),
    MeshMaterial3d(materials.add(StandardMaterial {
@@ -198,7 +125,7 @@ fn setup_scene(mut commands: Commands,
      Transform::from_xyz(0.0, 0.0, 0.0),
 ));
 
-//physics
+//obstacles with physics engine config
 let obsticle_colors = [Color::srgb_u8(255, 198, 174),
                           Color::srgb_u8(186, 156, 202),
                           Color::srgb_u8(115, 143, 182)];
@@ -278,7 +205,7 @@ fn ui_update(mut contexts: EguiContexts,
     });
 }
 
-fn sync_enemy_mesh_transform(
+fn updates_boids_mesh(
     mut query: Query<(&Boid, &mut Transform)>,
 ) {
     for (boid, mut transform) in query.iter_mut() {
@@ -290,7 +217,7 @@ fn sync_enemy_mesh_transform(
     }
 }
 
-fn update_target(
+fn update_target_mesh(
     mut query: Query<(&mut Target, &mut Transform)>,
     time: Res<Time>
 ) {
@@ -301,7 +228,8 @@ fn update_target(
     }
 }
 
-fn gizmos(mut gizmos: Gizmos,
+//
+fn draw_selected_distance_arrow(mut gizmos: Gizmos,
     query_enemies: Query<(Entity, &mut Boid, &mut Transform)>,
     settings : ResMut<BoidSettings>) {
     let selected_d = &settings.selected_distance;
@@ -311,12 +239,12 @@ fn gizmos(mut gizmos: Gizmos,
         SelectedDistance::Separation => {
             gizmos.arrow(first_enemy.1.position, 
                 first_enemy.1.position + first_enemy.1.velocity.normalize() * settings.separation_distance,  
-                Color::srgb(0.0, 0.0, 1.0));
+                Color::srgb(0.0, 1.0, 0.0));
         }
         SelectedDistance::Alignment => {
             gizmos.arrow(first_enemy.1.position, 
                 first_enemy.1.position + first_enemy.1.velocity.normalize() * settings.alignment_distance,  
-                Color::srgb(1.0, 0.0, 0.0));
+                Color::srgb(0.0, 1.0, 0.0));
         } SelectedDistance::Cohesion => {
             gizmos.arrow(first_enemy.1.position, 
                 first_enemy.1.position + first_enemy.1.velocity.normalize() * settings.cohesion_distance,  
@@ -328,8 +256,7 @@ fn gizmos(mut gizmos: Gizmos,
     
 }
 
-fn enemy_ai(commands: Commands,
-    mut query_enemies: Query<(Entity, &mut Boid, &mut Transform)>,
+fn update_boid_physics(mut query_enemies: Query<(Entity, &mut Boid, &mut Transform)>,
     query_target: Query<&Target>,
     rapier_context: ReadRapierContext,
     time: Res<Time>,
@@ -453,7 +380,7 @@ fn enemy_ai(commands: Commands,
         //do we collide
         let hit = rapier.cast_ray(boid.position,boid.velocity, 4.0, true, QueryFilter::only_fixed());
         if let Some((_,_toi)) = hit {
-                let free_dir = unobstructed_dir(&rapier, &settings.raycasy_directions, &boid.position, &boid.velocity);
+                let free_dir = ray_casting_utils::unobstructed_dir(&rapier, &settings.raycasy_directions, &boid.position, &boid.velocity);
                 separation += free_dir;    
         }
 
@@ -473,14 +400,4 @@ fn enemy_ai(commands: Commands,
         boid.velocity = tmp.velocity;
         
     }
-}
-
-fn unobstructed_dir<'a>(conrext: &RapierContext, look_dirs: &'a Vec<Vec3>, location: &Vec3, forward: &'a Vec3) -> &'a Vec3 {
-    for dir in look_dirs.iter() {
-        let hit = conrext.cast_ray(*location, *dir, 4.0, true, QueryFilter::only_fixed());
-        if hit.is_none() {
-            return dir;
-        }
-    }
-    forward
 }
