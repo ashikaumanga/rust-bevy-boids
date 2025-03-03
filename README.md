@@ -7,6 +7,9 @@ It also incorporates ray-cast-based obstacle avoidance using functionalities of 
 
 egui is used to implement UI menus.
 
+[![YouTube](http://i.ytimg.com/vi/TEzuYUo5qnE/hqdefault.jpg)](https://www.youtube.com/watch?v=TEzuYUo5qnE)
+
+
 
 ## Installation
 To get started with this project, ensure you have Rust and Cargo installed. Then, clone the repository and build the project:
