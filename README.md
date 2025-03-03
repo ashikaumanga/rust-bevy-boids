@@ -28,3 +28,10 @@ Run the simulation with the following command:
 cargo run [--release]
 ```
 
+## Reference
+
+https://www.cs.toronto.edu/~dt/siggraph97-course/cwr87/
+
+https://github.com/SebLague/Boids/tree/master
+
+https://www.youtube.com/watch?v=bqtqltqcQhw
