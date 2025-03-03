@@ -9,7 +9,7 @@ egui is used to implement UI menus.
 
 [![YouTube](http://i.ytimg.com/vi/TEzuYUo5qnE/hqdefault.jpg)](https://www.youtube.com/watch?v=TEzuYUo5qnE)
 
-[Watch the video on YouTube](https://www.youtube.com/watch?v=VIDEO_ID)
+[Watch the video on YouTube](https://www.youtube.com/watch?v=TEzuYUo5qnE)
 
 
 
