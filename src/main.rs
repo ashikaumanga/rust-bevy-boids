@@ -126,12 +126,12 @@ fn setup_scene(mut commands: Commands,
 ));
 
 //obstacles with physics engine config
+//torus
 let obsticle_colors = [Color::srgb_u8(255, 198, 174),
                           Color::srgb_u8(186, 156, 202),
                           Color::srgb_u8(115, 143, 182)];
 
 for i in 0..3 {
-
    let t_mesh = meshes.add(Torus::new(2.0+(i as f32 *2.0), 3.0+(i as f32*2.0) ));
    let t_mesh_collider= Collider::from_bevy_mesh(&meshes.get(t_mesh.id()).unwrap(), &ComputedColliderShape::TriMesh(TriMeshFlags::all())).unwrap();
    
@@ -140,8 +140,18 @@ for i in 0..3 {
         .insert(Mesh3d(t_mesh))
         .insert(MeshMaterial3d(materials.add(obsticle_colors[i % 3])))
         .insert(Transform::from_xyz(0.0, -4.0*i as f32, 0.0));
-
 }
+
+//sphere
+let t_mesh = meshes.add(Sphere::new(3.0));
+let t_mesh_collider= Collider::from_bevy_mesh(&meshes.get(t_mesh.id()).unwrap(), &ComputedColliderShape::TriMesh(TriMeshFlags::all())).unwrap();
+
+commands.spawn(RigidBody::Fixed)
+     .insert(t_mesh_collider)
+     .insert(Mesh3d(t_mesh))
+     .insert(MeshMaterial3d(materials.add(Color::srgb(0.0, 0.0, 1.0))))
+     .insert(Transform::from_xyz(0.0, 2.0, -5.0));
+
 
 
 // lights
@@ -178,13 +188,13 @@ fn ui_update(mut contexts: EguiContexts,
     mut boid_config : ResMut<BoidSettings>) {
         
     egui::Window::new("Bevy Boids").max_width(140.0).show(contexts.ctx_mut(), |ui| {
-        ui.add(egui::Slider::new(&mut boid_config.cohesion_force, 0.00..=1.00).text("cohesion"));
-        ui.add(egui::Slider::new(&mut boid_config.alignment_force, 0.00..=1.00).text("alignment"));
-        ui.add(egui::Slider::new(&mut boid_config.separation_force, 0.00..=1.00).text("seperation"));
+        ui.add(egui::Slider::new(&mut boid_config.cohesion_force, 0.00..=0.20).text("cohesion"));
+        ui.add(egui::Slider::new(&mut boid_config.alignment_force, 0.00..=0.20).text("alignment"));
+        ui.add(egui::Slider::new(&mut boid_config.separation_force, 0.00..=0.20).text("seperation"));
         ui.add(egui::Separator::default());
         let res_coh = ui.add(egui::Slider::new(&mut boid_config.cohesion_distance, 0.00..=2.00).text("cohesion distance"));
-        let res_ali = ui.add(egui::Slider::new(&mut boid_config.alignment_distance, 0.00..=2.00).text("alignment distance"));
-        let res_sep = ui.add(egui::Slider::new(&mut boid_config.separation_distance, 0.00..=2.00).text("seperation distance"));
+        let res_ali = ui.add(egui::Slider::new(&mut boid_config.alignment_distance, 0.00..=3.00).text("alignment distance"));
+        let res_sep = ui.add(egui::Slider::new(&mut boid_config.separation_distance, 0.00..=4.00).text("seperation distance"));
         ui.add(egui::Separator::default());
         ui.add(egui::Slider::new(&mut boid_config.max_speed, 0.50..=10.00).text("max speed"));
         ui.add(egui::Checkbox::new(&mut boid_config.follow_target, "follow target"));
@@ -239,7 +249,7 @@ fn draw_selected_distance_arrow(mut gizmos: Gizmos,
         SelectedDistance::Separation => {
             gizmos.arrow(first_enemy.1.position, 
                 first_enemy.1.position + first_enemy.1.velocity.normalize() * settings.separation_distance,  
-                Color::srgb(0.0, 1.0, 0.0));
+                Color::srgb(1.0, 0.0, 0.0));
         }
         SelectedDistance::Alignment => {
             gizmos.arrow(first_enemy.1.position, 
@@ -248,7 +258,7 @@ fn draw_selected_distance_arrow(mut gizmos: Gizmos,
         } SelectedDistance::Cohesion => {
             gizmos.arrow(first_enemy.1.position, 
                 first_enemy.1.position + first_enemy.1.velocity.normalize() * settings.cohesion_distance,  
-                Color::srgb(0.0, 1.0, 0.0));
+                Color::srgb(1.0, 1.0, 0.0));
         }
         
         _ => {},
